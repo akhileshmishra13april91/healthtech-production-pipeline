@@ -156,6 +156,10 @@ resource "aws_lambda_function" "content_splitter" {
   runtime          = "python3.11"
   timeout          = 300
 
+  # ATTACH THIS LAYER (Check the ARN for your region: us-east-1 example below)
+  # This provides Pandas and NumPy automatically.
+  layers = ["arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python311:12"]
+
   environment {
     variables = {
       BUCKET_NAME = aws_s3_bucket.data_lake.id
@@ -236,13 +240,13 @@ resource "aws_lambda_function" "get_presigned_url" {
   }
 }
 
-# --- 6. API Gateway for Presigned URL ---
+# --- 6. API Gateway (HTTP API) ---
 resource "aws_apigatewayv2_api" "http_api" {
-  name          = "healthtech-upload-api-${var.env}"
+  name          = "healthtech-api-${var.env}"
   protocol_type = "HTTP"
   cors_configuration {
     allow_origins = ["*"]
-    allow_methods = ["GET", "POST", "OPTIONS"]
+    allow_methods = ["GET", "PUT", "POST"]
     allow_headers = ["*"]
   }
 }
@@ -253,23 +257,29 @@ resource "aws_apigatewayv2_stage" "default" {
   auto_deploy = true
 }
 
-resource "aws_apigatewayv2_integration" "presigned_url_integration" {
-  api_id             = aws_apigatewayv2_api.http_api.id
-  integration_type   = "AWS_PROXY"
-  integration_uri    = aws_lambda_function.get_presigned_url.invoke_arn
-  integration_method = "POST"
+# --- Integration: Connect API to Lambda ---
+resource "aws_apigatewayv2_integration" "lambda_integration" {
+  api_id           = aws_apigatewayv2_api.http_api.id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.get_presigned_url.invoke_arn
 }
 
 resource "aws_apigatewayv2_route" "get_url_route" {
   api_id    = aws_apigatewayv2_api.http_api.id
   route_key = "GET /get-url"
-  target    = "integrations/${aws_apigatewayv2_integration.presigned_url_integration.id}"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
 }
 
-resource "aws_lambda_permission" "api_gw_invoke" {
-  statement_id  = "AllowAPIGatewayInvoke"
+# --- Permission: Allow API GW to invoke Lambda ---
+resource "aws_lambda_permission" "api_gw" {
+  statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.get_presigned_url.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
+}
+
+# --- Output the URL for your Frontend ---
+output "api_gateway_url" {
+  value = aws_apigatewayv2_api.http_api.api_endpoint
 }
